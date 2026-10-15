@@ -75,39 +75,8 @@ def main():
             st.stop()
             return
 
-    # ── Mode Selector ──
-    st.markdown(
-        "<h1 style='margin-bottom:0;'>"
-        "Psychology Textbook RAG System"
-        "</h1>"
-        "<p style='color:gray; margin-top:2px;'>"
-        "OpenStax Psychology 2e — Grounded answers with verifiable citations"
-        "</p>",
-        unsafe_allow_html=True
-    )
-
-    mode = st.radio(
-    label     = "Mode",
-    options   = ["Chat", "Batch JSON", "Batch CSV", "Evaluation Dashboard"],
-    horizontal = True,
-    label_visibility = "collapsed"
-    )
-
-    st.divider()
-
-    # ── Route to Mode ──
-    if mode == "Chat":
-        render_chat(components)
-
-    elif mode == "Batch JSON":
-        render_batch_json(components)
-
-    elif mode == "Batch CSV":
-        render_batch_csv(components)
-        
-    elif mode == "Evaluation Dashboard":
-        from pages.evaluation import render_evaluation
-        render_evaluation()
+    # ── Main Chat Interface ──
+    render_chat(components)
 
 
 if __name__ == "__main__":

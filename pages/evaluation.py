@@ -47,7 +47,7 @@ def render_evaluation():
             value=f"{metrics.get('Average Token F1', 0):.3f}"
         )
     
-    st.caption(f"Evaluated on {metrics.get('Total Questions', 0)} automated textbook queries against the Llama-3.1 model.")
+    st.caption(f"Evaluated on {metrics.get('Total Questions', 0)} automated textbook queries with K=7 retrieval against the GPT-OSS-20B model.")
     
     st.divider()
     
@@ -68,7 +68,7 @@ def render_evaluation():
     
     # ── Render Full Breakdown ──
     st.markdown("### 📄 Full Dataset Predictions Log")
-    with st.expander("View all 30 generated results..."):
+    with st.expander(f"View all {len(results)} generated results..."):
         for i, res in enumerate(results):
             st.markdown(f"**Q{i+1}: {res['question']}**")
             st.markdown(f"> *True*: {res['true']}")

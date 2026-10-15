@@ -3,6 +3,7 @@
 import streamlit as st
 import json
 from utils.citation import find_exact_citations, format_citations
+from components.verification_view import render_verification_block
 
 
 def render_chat_message(role: str, content: dict, msg_index: int = 0):
@@ -22,15 +23,18 @@ def render_chat_message(role: str, content: dict, msg_index: int = 0):
             answer = content.get("answer", "")
             elapsed = content.get("elapsed", 0)
 
-            # Answer
+            # 1. Main Answer Display
             if "Not found" in answer:
                 st.warning(answer)
             else:
                 st.markdown(answer)
 
-            st.caption(f"Response time: {elapsed:.2f}s")
+            # 2. Verification Status & Explanations
+            verification_data = content.get("verification")
+            if verification_data:
+                render_verification_block(verification_data)
 
-            # Exact Citations
+            # 3. Exact Source Citations
             citations  = content.get("citations", [])
             formatted  = format_citations(citations)
 
@@ -45,12 +49,6 @@ def render_chat_message(role: str, content: dict, msg_index: int = 0):
                         f"Pages referenced: "
                         f"{', '.join(str(p) for p in refs['pages'])}"
                     )
-
-            # Retrieved chunks expander
-            retrieved = content.get("retrieved", [])
-            if retrieved:
-                with st.expander("Retrieved Context", expanded=False):
-                    _render_chunks(retrieved, msg_index)
 
 
 def _render_citation(cite: dict):

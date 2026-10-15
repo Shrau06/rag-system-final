@@ -1,0 +1,53 @@
+[
+  {
+    "run": 1,
+    "answer": "Short\u2011term memory (STM) is a temporary storage system that receives information from sensory memory and holds it for about 15\u201330\u202fseconds. It can hold roughly 7\u202f\u00b1\u202f2 items (though more recent work suggests a capacity of 4\u202f\u00b1\u202f1). Information in STM can be moved to long\u2011term memory through rehearsal\u2014either active rehearsal (repeating the material) or elaborative rehearsal (linking it to existing knowledge). If the material is not rehearsed, it is discarded.",
+    "status": "SUPPORTED",
+    "verdict": "ENTAILED_BY_TOP3",
+    "combination_used": "TOP_3",
+    "selected_chunks": [
+      1,
+      2,
+      4
+    ],
+    "entailment_prob": 0.9161,
+    "neutral_prob": 0.0796,
+    "contradiction_prob": 0.0043,
+    "gen_time_sec": 5.198255800001789,
+    "verif_time_sec": 16.980100199987646
+  },
+  {
+    "run": 2,
+    "answer": "Short\u2011term memory (STM) is a temporary storage system that processes incoming sensory information. It holds information for about 15\u201330\u202fseconds, similar to the contents displayed on a computer screen. Information in STM can be moved to long\u2011term memory through rehearsal\u2014active rehearsal (repeating the material) or elaborative rehearsal (linking it to existing knowledge). STM has a limited capacity, typically around 7\u202f\u00b1\u202f2 items (or 4\u202f\u00b1\u202f1 in more recent studies).",
+    "status": "SUPPORTED",
+    "verdict": "ENTAILED_BY_TOP3",
+    "combination_used": "TOP_3",
+    "selected_chunks": [
+      1,
+      2,
+      4
+    ],
+    "entailment_prob": 0.9804,
+    "neutral_prob": 0.0176,
+    "contradiction_prob": 0.002,
+    "gen_time_sec": 3.9983287999930326,
+    "verif_time_sec": 14.489692700008163
+  },
+  {
+    "run": 3,
+    "answer": "Short\u2011term memory (STM) is a temporary storage system that processes incoming sensory memory. It holds information for about 15\u201330\u202fseconds, similar to the contents displayed on a computer screen. Information in STM can be moved to long\u2011term memory through rehearsal\u2014active rehearsal (repeating the material) or elaborative rehearsal (linking it to existing knowledge). STM has a limited capacity, typically around 7\u202f\u00b1\u202f2 items (or 4\u202f\u00b1\u202f1 in more recent studies).",
+    "status": "SUPPORTED",
+    "verdict": "ENTAILED_BY_TOP3",
+    "combination_used": "TOP_3",
+    "selected_chunks": [
+      1,
+      2,
+      4
+    ],
+    "entailment_prob": 0.9801,
+    "neutral_prob": 0.0179,
+    "contradiction_prob": 0.0021,
+    "gen_time_sec": 3.755035499983933,
+    "verif_time_sec": 14.603957100014668
+  }
+]

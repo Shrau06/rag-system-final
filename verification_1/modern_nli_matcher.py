@@ -55,6 +55,15 @@ MODERN_NLI_ID2LABEL: Dict[int, str] = {
 
 # Global model and tokenizer cache
 _MODERN_NLI_BUNDLE: Optional[Tuple[Any, Any, Dict[str, int]]] = None
+_LAST_MODEL_LOAD_TIME_SEC: float = 0.0
+
+
+def get_last_model_load_time_sec() -> float:
+    """Returns the model load duration in seconds if loaded during the current query, else 0.0."""
+    global _LAST_MODEL_LOAD_TIME_SEC
+    val = _LAST_MODEL_LOAD_TIME_SEC
+    _LAST_MODEL_LOAD_TIME_SEC = 0.0
+    return val
 
 
 def get_modern_nli_model(
@@ -67,11 +76,12 @@ def get_modern_nli_model(
         A tuple of (tokenizer, model, label_map) where label_map maps
         'contradiction' -> 0, 'entailment' -> 1, 'neutral' -> 2.
     """
-    global _MODERN_NLI_BUNDLE
+    global _MODERN_NLI_BUNDLE, _LAST_MODEL_LOAD_TIME_SEC
     if _MODERN_NLI_BUNDLE is not None:
         return _MODERN_NLI_BUNDLE
 
     try:
+        import time
         from transformers import AutoTokenizer, AutoModelForSequenceClassification
     except ImportError as exc:
         raise ImportError(
@@ -79,9 +89,11 @@ def get_modern_nli_model(
         ) from exc
 
     logger.info(f"Loading ModernBERT NLI model: {model_name}")
+    t0_load = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     model.eval()
+    _LAST_MODEL_LOAD_TIME_SEC = round(time.perf_counter() - t0_load, 4)
 
     label_map = dict(MODERN_NLI_LABEL_MAP)
     _MODERN_NLI_BUNDLE = (tokenizer, model, label_map)

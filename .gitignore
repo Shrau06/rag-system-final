@@ -34,6 +34,8 @@ temp_chroma/
 
 # Runtime outputs
 outputs/
+verification_1/output/diagnostic_timing_log.jsonl
+verification_1/output/rag_snapshots/
 
 # Large source binaries / textbook PDF
 data/book.pdf

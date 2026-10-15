@@ -2,18 +2,23 @@
 verification_1: Production-Ready ModernCE Complete-Answer Multi-Chunk Verifier
 
 Evaluates whether a complete generated RAG answer is supported by retrieved textbook
-evidence using long-context ModernBERT cross-encoder NLI (dleemiller/ModernCE-base-nli).
+evidence using long-context ModernBERT cross-encoder NLI (dleemiller/ModernCE-base-nli)
+with ranked, progressive evidence concatenation.
 
 Architecture:
   Generated Answer + Retrieved Chunks
   1. Check for explicit abstention ("Not found in textbook") -> return NOT_FOUND status.
   2. Score individual chunks against complete answer via ModernCE.
-  3. Rank chunks by entailment probability descending.
-  4. Evaluate complete answer against Top-2 combined chunks.
-  5. If Top-2 predicts ENTAILMENT -> return SUPPORTED (ENTAILED_BY_TOP2).
-  6. Otherwise evaluate against Top-3 combined chunks as fallback.
-  7. If Top-3 predicts ENTAILMENT -> return SUPPORTED (ENTAILED_BY_TOP3).
-  8. Otherwise return INSUFFICIENT_EVIDENCE / CONTRADICTED (NOT_ENTAILED).
+  3. Rank chunks by entailment probability descending (tie-broken stably).
+  4. Progressive Evidence Concatenation:
+     - Comparison 1: C1
+     - Comparison 2: C1 + C2
+     - Comparison 3: C1 + C2 + C3
+     - Comparison 4: C1 + C2 + C3 + C4
+  5. If any comparison predicts ENTAILMENT -> immediately return SUPPORTED (ENTAILED_BY_TOP{k}).
+  6. If no comparison predicts ENTAILMENT -> select the best non-entailment result across
+     comparisons 1..M according to explicit score rule (neutral preferred over contradiction,
+     higher entailment probability, lower contradiction probability).
 """
 
 import sys
@@ -34,6 +39,7 @@ from verification_1.modern_nli_matcher import (
     MODERN_NLI_LABEL_MAP,
     DEFAULT_MAX_LENGTH,
     get_modern_nli_model,
+    get_last_model_load_time_sec,
 )
 
 # ─────────────────────────────────────────────
@@ -47,8 +53,10 @@ STATUS_CONTRADICTED = "CONTRADICTED"
 STATUS_NOT_FOUND = "NOT_FOUND"
 
 # Internal/detailed NLI verdicts
+VERDICT_ENTAILED_BY_TOP1 = "ENTAILED_BY_TOP1"
 VERDICT_ENTAILED_BY_TOP2 = "ENTAILED_BY_TOP2"
 VERDICT_ENTAILED_BY_TOP3 = "ENTAILED_BY_TOP3"
+VERDICT_ENTAILED_BY_TOP4 = "ENTAILED_BY_TOP4"
 VERDICT_NOT_ENTAILED = "NOT_ENTAILED"
 VERDICT_ABSTENTION = "ABSTENTION"
 
@@ -80,7 +88,7 @@ class ChunkScore:
 @dataclass
 class MultiChunkScore:
     """Evaluation result for a combined multi-chunk premise."""
-    combination_type: str  # "TOP_2" or "TOP_3"
+    combination_type: str  # "TOP_1", "TOP_2", "TOP_3", "TOP_4"
     selected_chunk_numbers: List[int]
     selected_chunk_ids: List[str]
     token_count: int = 0
@@ -101,9 +109,9 @@ class VerificationResult:
     Complete structured verification output returned to callers.
     """
     status: str  # SUPPORTED, INSUFFICIENT_EVIDENCE, CONTRADICTED, NOT_FOUND
-    verdict: str  # ENTAILED_BY_TOP2, ENTAILED_BY_TOP3, NOT_ENTAILED, ABSTENTION
+    verdict: str  # ENTAILED_BY_TOP1..4, NOT_ENTAILED, ABSTENTION
     is_abstention: bool = False
-    combination_used: Optional[str] = None  # "TOP_2", "TOP_3", or None
+    combination_used: Optional[str] = None  # "TOP_1", "TOP_2", "TOP_3", "TOP_4", or None
     entailment_prob: float = 0.0
     neutral_prob: float = 0.0
     contradiction_prob: float = 0.0
@@ -114,8 +122,10 @@ class VerificationResult:
     ranked_chunk_numbers: List[int] = field(default_factory=list)
     top_2_evaluation: Optional[Dict[str, Any]] = None
     top_3_evaluation: Optional[Dict[str, Any]] = None
+    progressive_evaluations: List[Dict[str, Any]] = field(default_factory=list)
     total_nli_time_sec: float = 0.0
     explanation: str = ""
+    timing_breakdown: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -252,6 +262,18 @@ def _evaluate_pair(
     }
 
 
+def _non_entailment_score(comp: MultiChunkScore) -> Tuple[int, float, float]:
+    """
+    Score key for selecting the best non-entailment comparison across progressive stages:
+    1. Label priority: Prefer 'neutral' (INSUFFICIENT_EVIDENCE, score 1) over 'contradiction' (CONTRADICTED, score 0).
+       (A lack of sufficient evidence is considered a better/closer state to support than active factual contradiction).
+    2. Entailment probability: Higher entailment_prob represents closer alignment to full evidence support.
+    3. Contradiction probability: Lower contradiction_prob (-contradiction_prob) breaks ties in favor of lower conflict.
+    """
+    label_priority = 1 if comp.predicted_label == "neutral" else 0
+    return (label_priority, comp.entailment_prob, -comp.contradiction_prob)
+
+
 # ─────────────────────────────────────────────
 # MAIN VERIFIER CLASS
 # ─────────────────────────────────────────────
@@ -259,7 +281,7 @@ def _evaluate_pair(
 class ModernCEVerifier:
     """
     Production verifier that uses ModernBERT Cross-Encoder NLI on complete generated answers
-    and adaptive Top-2 / Top-3 evidence aggregation.
+    and ranked, progressive multi-chunk evidence aggregation (up to 4 stages).
     """
 
     def __init__(
@@ -284,11 +306,12 @@ class ModernCEVerifier:
         query: Optional[str] = None,
     ) -> VerificationResult:
         """
-        Verifies a generated answer against retrieved evidence chunks.
+        Verifies a generated answer against retrieved evidence chunks using
+        ranked, progressive evidence concatenation.
 
         Args:
             answer: The complete original generated answer string.
-            retrieved_chunks: List of retrieved chunk dictionaries or strings (typically 5 chunks).
+            retrieved_chunks: List of retrieved chunk dictionaries or strings (typically 5-7 chunks).
             query: Optional user question for logging/context.
 
         Returns:
@@ -301,6 +324,20 @@ class ModernCEVerifier:
         # -------------------------------------------------------------
         if self.is_abstention(answer):
             total_time = time.perf_counter() - t0_total
+            timing_info = {
+                "model_load_time_sec": get_last_model_load_time_sec(),
+                "num_retrieved_chunks": len(retrieved_chunks) if retrieved_chunks else 0,
+                "num_individual_evaluations": 0,
+                "individual_eval_time_sec": 0.0,
+                "individual_chunk_token_counts": [],
+                "num_progressive_comparisons": 0,
+                "progressive_evaluations": [],
+                "ran_top1": False,
+                "ran_top2": False,
+                "ran_top3": False,
+                "ran_top4": False,
+                "total_nli_time_sec": round(total_time, 4),
+            }
             return VerificationResult(
                 status=STATUS_NOT_FOUND,
                 verdict=VERDICT_ABSTENTION,
@@ -316,8 +353,10 @@ class ModernCEVerifier:
                 ranked_chunk_numbers=[],
                 top_2_evaluation=None,
                 top_3_evaluation=None,
+                progressive_evaluations=[],
                 total_nli_time_sec=round(total_time, 4),
-                explanation="Answer explicitly states that information was not found in the textbook. NLI verification against retrieved chunks was safely bypassed."
+                explanation="Answer explicitly states that information was not found in the textbook. NLI verification against retrieved chunks was safely bypassed.",
+                timing_breakdown=timing_info
             )
 
         # -------------------------------------------------------------
@@ -325,6 +364,20 @@ class ModernCEVerifier:
         # -------------------------------------------------------------
         if not retrieved_chunks:
             total_time = time.perf_counter() - t0_total
+            timing_info = {
+                "model_load_time_sec": get_last_model_load_time_sec(),
+                "num_retrieved_chunks": 0,
+                "num_individual_evaluations": 0,
+                "individual_eval_time_sec": 0.0,
+                "individual_chunk_token_counts": [],
+                "num_progressive_comparisons": 0,
+                "progressive_evaluations": [],
+                "ran_top1": False,
+                "ran_top2": False,
+                "ran_top3": False,
+                "ran_top4": False,
+                "total_nli_time_sec": round(total_time, 4),
+            }
             return VerificationResult(
                 status=STATUS_INSUFFICIENT_EVIDENCE,
                 verdict=VERDICT_NOT_ENTAILED,
@@ -340,14 +393,16 @@ class ModernCEVerifier:
                 ranked_chunk_numbers=[],
                 top_2_evaluation=None,
                 top_3_evaluation=None,
+                progressive_evaluations=[],
                 total_nli_time_sec=round(total_time, 4),
-                explanation="No retrieved evidence chunks were provided for verification."
+                explanation="No retrieved evidence chunks were provided for verification.",
+                timing_breakdown=timing_info
             )
 
         normalized_chunks = [_normalize_chunk(c, i) for i, c in enumerate(retrieved_chunks)]
 
         # -------------------------------------------------------------
-        # 3. Individual Chunk Evaluations & Ranking
+        # 3. Individual Chunk Evaluations & Ranking (Step 1)
         # -------------------------------------------------------------
         individual_scores: List[ChunkScore] = []
         total_nli_time = 0.0
@@ -379,6 +434,9 @@ class ModernCEVerifier:
             )
             individual_scores.append(c_score)
 
+        indiv_eval_total_sec = sum(c.eval_time_sec for c in individual_scores)
+        indiv_token_counts = [c.token_count for c in individual_scores]
+
         # Rank chunks by entailment_prob descending (stable tie-break by chunk_number)
         ranked_chunks = sorted(
             individual_scores,
@@ -388,155 +446,137 @@ class ModernCEVerifier:
         ranked_chunk_nums = [c.chunk_number for c in ranked_chunks]
 
         # -------------------------------------------------------------
-        # 4. Top-2 Evidence Evaluation
+        # 4. Progressive Verification Loop (Step 2)
         # -------------------------------------------------------------
-        k_top2 = min(2, len(ranked_chunks))
-        top2_candidates = ranked_chunks[:k_top2]
-        # Preserve original retrieval order
-        top2_ordered = sorted(top2_candidates, key=lambda x: x.chunk_number)
-        top2_nums = [c.chunk_number for c in top2_ordered]
-        top2_ids = [c.chunk_id for c in top2_ordered]
+        # Stages: Comparison 1 (C1), Comparison 2 (C1+C2), Comparison 3 (C1+C2+C3), Comparison 4 (C1+C2+C3+C4)
+        max_stages = min(4, len(ranked_chunks))
+        progressive_scores: List[MultiChunkScore] = []
+        found_entailment = False
+        winning_comp: Optional[MultiChunkScore] = None
+        winning_k = 0
 
-        top2_texts = []
-        for c in top2_ordered:
-            ch_raw = next(ch["text"] for ch in normalized_chunks if ch["chunk_number"] == c.chunk_number)
-            top2_texts.append(ch_raw)
-        top2_premise = "\n\n".join(top2_texts)
+        model_load_dur = get_last_model_load_time_sec()
 
-        res_top2 = _evaluate_pair(
-            premise=top2_premise,
-            hypothesis=answer,
-            tokenizer=self.tokenizer,
-            model=self.model,
-            label_map=self.label_map,
-            max_length=self.max_length,
-        )
-        total_nli_time += res_top2["eval_time_sec"]
+        for k in range(1, max_stages + 1):
+            candidates = ranked_chunks[:k]
+            # Preserve original retrieval order for narrative coherence
+            ordered_candidates = sorted(candidates, key=lambda x: x.chunk_number)
+            nums = [c.chunk_number for c in ordered_candidates]
+            ids = [c.chunk_id for c in ordered_candidates]
 
-        top2_obj = MultiChunkScore(
-            combination_type="TOP_2",
-            selected_chunk_numbers=top2_nums,
-            selected_chunk_ids=top2_ids,
-            token_count=res_top2["token_count"],
-            is_truncated=res_top2["is_truncated"],
-            entailment_prob=res_top2["entailment_prob"],
-            neutral_prob=res_top2["neutral_prob"],
-            contradiction_prob=res_top2["contradiction_prob"],
-            predicted_label=res_top2["predicted_label"],
-            eval_time_sec=res_top2["eval_time_sec"],
-        )
+            if k == 1:
+                # Comparison 1: Single top-ranked chunk (reusing individual forward pass)
+                top1_c = candidates[0]
+                comp_score = MultiChunkScore(
+                    combination_type="TOP_1",
+                    selected_chunk_numbers=[top1_c.chunk_number],
+                    selected_chunk_ids=[top1_c.chunk_id],
+                    token_count=top1_c.token_count,
+                    is_truncated=top1_c.is_truncated,
+                    entailment_prob=top1_c.entailment_prob,
+                    neutral_prob=top1_c.neutral_prob,
+                    contradiction_prob=top1_c.contradiction_prob,
+                    predicted_label=top1_c.predicted_label,
+                    eval_time_sec=top1_c.eval_time_sec,
+                )
+            else:
+                texts = []
+                for c in ordered_candidates:
+                    ch_raw = next(ch["text"] for ch in normalized_chunks if ch["chunk_number"] == c.chunk_number)
+                    texts.append(ch_raw)
+                premise = "\n\n".join(texts)
 
-        # STOP CONDITION: If Top-2 predicts ENTAILMENT -> Return SUPPORTED
-        if top2_obj.predicted_label == "entailment":
-            return VerificationResult(
-                status=STATUS_SUPPORTED,
-                verdict=VERDICT_ENTAILED_BY_TOP2,
-                is_abstention=False,
-                combination_used="TOP_2",
-                entailment_prob=top2_obj.entailment_prob,
-                neutral_prob=top2_obj.neutral_prob,
-                contradiction_prob=top2_obj.contradiction_prob,
-                predicted_label=top2_obj.predicted_label,
-                selected_chunk_numbers=top2_obj.selected_chunk_numbers,
-                selected_chunk_ids=top2_obj.selected_chunk_ids,
-                individual_chunk_evaluations=[c.to_dict() for c in individual_scores],
-                ranked_chunk_numbers=ranked_chunk_nums,
-                top_2_evaluation=top2_obj.to_dict(),
-                top_3_evaluation=None,
-                total_nli_time_sec=round(total_nli_time, 4),
-                explanation=f"Generated answer is strongly supported by Top-2 retrieved chunks {top2_nums} (Entailment: {top2_obj.entailment_prob:.4f})."
-            )
+                res_k = _evaluate_pair(
+                    premise=premise,
+                    hypothesis=answer,
+                    tokenizer=self.tokenizer,
+                    model=self.model,
+                    label_map=self.label_map,
+                    max_length=self.max_length,
+                )
+                total_nli_time += res_k["eval_time_sec"]
+
+                comp_score = MultiChunkScore(
+                    combination_type=f"TOP_{k}",
+                    selected_chunk_numbers=nums,
+                    selected_chunk_ids=ids,
+                    token_count=res_k["token_count"],
+                    is_truncated=res_k["is_truncated"],
+                    entailment_prob=res_k["entailment_prob"],
+                    neutral_prob=res_k["neutral_prob"],
+                    contradiction_prob=res_k["contradiction_prob"],
+                    predicted_label=res_k["predicted_label"],
+                    eval_time_sec=res_k["eval_time_sec"],
+                )
+
+            progressive_scores.append(comp_score)
+
+            # Check for ENTAILMENT -> Immediate early stopping
+            if comp_score.predicted_label == "entailment":
+                found_entailment = True
+                winning_comp = comp_score
+                winning_k = k
+                break
 
         # -------------------------------------------------------------
-        # 5. Top-3 Evidence Evaluation (Fallback)
+        # 5. Formulate Final Verdict & Result
         # -------------------------------------------------------------
-        if len(ranked_chunks) < 3:
-            # Not enough chunks for Top-3
-            final_status = STATUS_CONTRADICTED if top2_obj.predicted_label == "contradiction" else STATUS_INSUFFICIENT_EVIDENCE
-            return VerificationResult(
-                status=final_status,
-                verdict=VERDICT_NOT_ENTAILED,
-                is_abstention=False,
-                combination_used="TOP_2",
-                entailment_prob=top2_obj.entailment_prob,
-                neutral_prob=top2_obj.neutral_prob,
-                contradiction_prob=top2_obj.contradiction_prob,
-                predicted_label=top2_obj.predicted_label,
-                selected_chunk_numbers=top2_obj.selected_chunk_numbers,
-                selected_chunk_ids=top2_obj.selected_chunk_ids,
-                individual_chunk_evaluations=[c.to_dict() for c in individual_scores],
-                ranked_chunk_numbers=ranked_chunk_nums,
-                top_2_evaluation=top2_obj.to_dict(),
-                top_3_evaluation=None,
-                total_nli_time_sec=round(total_nli_time, 4),
-                explanation=f"Top-2 chunks were {top2_obj.predicted_label.upper()} (Entailment: {top2_obj.entailment_prob:.4f}). Insufficient additional chunks for Top-3."
-            )
+        top2_dict = next((s.to_dict() for s in progressive_scores if s.combination_type == "TOP_2"), None)
+        top3_dict = next((s.to_dict() for s in progressive_scores if s.combination_type == "TOP_3"), None)
+        prog_dicts = [s.to_dict() for s in progressive_scores]
 
-        k_top3 = 3
-        top3_candidates = ranked_chunks[:k_top3]
-        top3_ordered = sorted(top3_candidates, key=lambda x: x.chunk_number)
-        top3_nums = [c.chunk_number for c in top3_ordered]
-        top3_ids = [c.chunk_id for c in top3_ordered]
-
-        top3_texts = []
-        for c in top3_ordered:
-            ch_raw = next(ch["text"] for ch in normalized_chunks if ch["chunk_number"] == c.chunk_number)
-            top3_texts.append(ch_raw)
-        top3_premise = "\n\n".join(top3_texts)
-
-        res_top3 = _evaluate_pair(
-            premise=top3_premise,
-            hypothesis=answer,
-            tokenizer=self.tokenizer,
-            model=self.model,
-            label_map=self.label_map,
-            max_length=self.max_length,
-        )
-        total_nli_time += res_top3["eval_time_sec"]
-
-        top3_obj = MultiChunkScore(
-            combination_type="TOP_3",
-            selected_chunk_numbers=top3_nums,
-            selected_chunk_ids=top3_ids,
-            token_count=res_top3["token_count"],
-            is_truncated=res_top3["is_truncated"],
-            entailment_prob=res_top3["entailment_prob"],
-            neutral_prob=res_top3["neutral_prob"],
-            contradiction_prob=res_top3["contradiction_prob"],
-            predicted_label=res_top3["predicted_label"],
-            eval_time_sec=res_top3["eval_time_sec"],
-        )
-
-        if top3_obj.predicted_label == "entailment":
+        if found_entailment and winning_comp is not None:
             final_status = STATUS_SUPPORTED
-            final_verdict = VERDICT_ENTAILED_BY_TOP3
-            explanation = f"Generated answer required Top-3 chunks {top3_nums} to achieve full evidence support (Entailment: {top3_obj.entailment_prob:.4f})."
-        elif top3_obj.predicted_label == "contradiction":
-            final_status = STATUS_CONTRADICTED
-            final_verdict = VERDICT_NOT_ENTAILED
-            explanation = f"Generated answer conflicts with retrieved evidence in Top-3 chunks {top3_nums} (Contradiction: {top3_obj.contradiction_prob:.4f})."
+            final_verdict = f"ENTAILED_BY_TOP{winning_k}"
+            explanation = f"Generated answer is strongly supported by Top-{winning_k} retrieved chunks {winning_comp.selected_chunk_numbers} (Entailment: {winning_comp.entailment_prob:.4f})."
+            selected_comp = winning_comp
         else:
-            final_status = STATUS_INSUFFICIENT_EVIDENCE
-            final_verdict = VERDICT_NOT_ENTAILED
-            explanation = f"Retrieved evidence in Top-3 chunks {top3_nums} is insufficient to fully entail the answer (Neutral: {top3_obj.neutral_prob:.4f}, Entailment: {top3_obj.entailment_prob:.4f})."
+            # If no comparison predicts entailment, select best result across comparisons 1..max_stages
+            best_comp = max(progressive_scores, key=_non_entailment_score)
+            selected_comp = best_comp
+            if best_comp.predicted_label == "contradiction":
+                final_status = STATUS_CONTRADICTED
+                final_verdict = VERDICT_NOT_ENTAILED
+                explanation = f"Generated answer conflicts with retrieved evidence in Top-{len(best_comp.selected_chunk_numbers)} chunks {best_comp.selected_chunk_numbers} (Contradiction: {best_comp.contradiction_prob:.4f})."
+            else:
+                final_status = STATUS_INSUFFICIENT_EVIDENCE
+                final_verdict = VERDICT_NOT_ENTAILED
+                explanation = f"Retrieved evidence across progressive comparisons (best: Top-{len(best_comp.selected_chunk_numbers)} chunks {best_comp.selected_chunk_numbers}) is insufficient to fully entail the answer (Neutral: {best_comp.neutral_prob:.4f}, Entailment: {best_comp.entailment_prob:.4f})."
+
+        timing_info = {
+            "model_load_time_sec": model_load_dur,
+            "num_retrieved_chunks": len(normalized_chunks),
+            "num_individual_evaluations": len(individual_scores),
+            "individual_eval_time_sec": round(indiv_eval_total_sec, 4),
+            "individual_chunk_token_counts": indiv_token_counts,
+            "num_progressive_comparisons": len(progressive_scores),
+            "progressive_evaluations": prog_dicts,
+            "ran_top1": any(s.combination_type == "TOP_1" for s in progressive_scores),
+            "ran_top2": any(s.combination_type == "TOP_2" for s in progressive_scores),
+            "ran_top3": any(s.combination_type == "TOP_3" for s in progressive_scores),
+            "ran_top4": any(s.combination_type == "TOP_4" for s in progressive_scores),
+            "total_nli_time_sec": round(total_nli_time, 4),
+        }
 
         return VerificationResult(
             status=final_status,
             verdict=final_verdict,
             is_abstention=False,
-            combination_used="TOP_3",
-            entailment_prob=top3_obj.entailment_prob,
-            neutral_prob=top3_obj.neutral_prob,
-            contradiction_prob=top3_obj.contradiction_prob,
-            predicted_label=top3_obj.predicted_label,
-            selected_chunk_numbers=top3_obj.selected_chunk_numbers,
-            selected_chunk_ids=top3_obj.selected_chunk_ids,
+            combination_used=selected_comp.combination_type,
+            entailment_prob=selected_comp.entailment_prob,
+            neutral_prob=selected_comp.neutral_prob,
+            contradiction_prob=selected_comp.contradiction_prob,
+            predicted_label=selected_comp.predicted_label,
+            selected_chunk_numbers=selected_comp.selected_chunk_numbers,
+            selected_chunk_ids=selected_comp.selected_chunk_ids,
             individual_chunk_evaluations=[c.to_dict() for c in individual_scores],
             ranked_chunk_numbers=ranked_chunk_nums,
-            top_2_evaluation=top2_obj.to_dict(),
-            top_3_evaluation=top3_obj.to_dict(),
+            top_2_evaluation=top2_dict,
+            top_3_evaluation=top3_dict,
+            progressive_evaluations=prog_dicts,
             total_nli_time_sec=round(total_nli_time, 4),
-            explanation=explanation
+            explanation=explanation,
+            timing_breakdown=timing_info
         )
 
 
@@ -568,3 +608,4 @@ def verify_answer(
 
 # Alias for verify_answer matching standard functional signatures
 verify = verify_answer
+

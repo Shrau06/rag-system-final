@@ -3,6 +3,7 @@
 import streamlit as st
 import json
 from utils.citation import format_citations
+from components.verification_view import render_verification_block
 
 
 def render_answer_block(result: dict,
@@ -22,7 +23,10 @@ def render_answer_block(result: dict,
     else:
         st.success(answer)
 
-    st.caption(f"Response time: {elapsed:.2f}s")
+    # Verification block (if present)
+    verification_data = result.get("verification")
+    if verification_data:
+        render_verification_block(verification_data)
 
     # Exact citations
     if formatted:

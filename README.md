@@ -24,9 +24,10 @@ queries.json → Hybrid Retrieval (Vector + BM25) → NVIDIA LLM → submission.
 
 ## Retrieval Strategy
 
-- Vector search via ChromaDB (cosine similarity, all-MiniLM-L6-v2)
-- Keyword search via BM25 (rank_bm25)
+- Vector search via ChromaDB (cosine similarity, all-MiniLM-L6-v2, candidate K=15)
+- Keyword search via BM25 (rank_bm25, candidate K=15)
 - Results merged using Reciprocal Rank Fusion (RRF, k=60)
+- Final retrieved context: K=7 chunks (empirically selected for 98.6% keyword coverage and 0.802 average semantic similarity within the 20,000-character context limit)
 - Supplementary chunks (summaries, review questions) ranked below main content
 - Page-overlap deduplication prevents redundant context
 
@@ -105,12 +106,16 @@ All components should show ✓.
 - **answer** — generated response grounded in context
 - **references** — JSON string: `{"sections": [...], "pages": [...]}`
 
-## Performance
+## Performance & Evaluation
 
-- Answer rate: 100% (50/50 queries)
-- Avg pages cited per query: 6.6
+- Evaluation benchmark: 50 textbook queries (`outputs/dataset.json`)
+- Generation model: `openai/gpt-oss-20b` via NVIDIA NIM
+- Final retrieval context: K=7 chunks (average context length: 18,610 characters)
+- High-similarity accuracy (Semantic Sim > 0.80): 66.0% (33/50)
+- Average semantic similarity: 0.802
+- Average token F1 score: 0.431
+- Answer completion rate: 100% (50/50 queries)
 - Index build time: ~5 minutes (cached after first run)
-- Query processing: ~2.5 seconds per query
 
 ## Tech Stack
 
@@ -120,4 +125,4 @@ All components should show ✓.
 | Embeddings     | sentence-transformers (all-MiniLM-L6-v2) |
 | Vector DB      | ChromaDB 0.5.3                           |
 | Keyword search | rank-bm25                                |
-| LLM            | NVIDIA NIM (meta/llama-3.1-8b-instruct)  |
+| LLM            | NVIDIA NIM (openai/gpt-oss-20b)          |

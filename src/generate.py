@@ -26,10 +26,13 @@ API_DELAY = 1.5
 # Token limit never triggers at temperature=0.1
 MAX_ANSWER_TOKENS = 3000
 
-# Updated from 12000 based on empirical evaluation (evaluate_top_k.py)
-# 7 chunks average 19,322 chars
-# Llama-3.1-8b has 128k token (~512k char) context window
-# 20k = 3.8% of model capacity — well within limits
+# Updated from 12000 based on empirical context-coverage evaluation.
+# The 18-query experiment measured an average context length of 19,322
+# characters for final K=7, with 98.6% average keyword coverage.
+# The active generation model is openai/gpt-oss-20b via NVIDIA NIM.
+# Its documented context window is 128,000 tokens.
+# MAX_CONTEXT_CHARS is an application-level limit on retrieved context,
+# not the model's maximum context-window size.
 MAX_CONTEXT_CHARS = 20000
 
 # Token usage log file
@@ -209,25 +212,31 @@ def build_prompt(question: str,
     Returns (system_message, user_message)
     """
 
-    style_instruction = "3. Be concise and factual. 2-5 sentences is ideal."
+    style_instruction = "Be concise and factual (2-5 sentences is ideal)."
     if "Concise" in answer_style:
-        style_instruction = "3. Provide a very brief, 1-2 sentence summary."
+        style_instruction = "Provide a very brief, 1-2 sentence summary."
     elif "Bullet" in answer_style:
-        style_instruction = "3. Provide the answer entirely as a concise bulleted list."
+        style_instruction = "Provide the answer entirely as a concise bulleted list."
     elif "Detailed" in answer_style:
-        style_instruction = "3. Provide a massive, comprehensive, detailed explanation."
+        style_instruction = "Provide a comprehensive explanation based strictly on the available context."
 
-    system_message = f"""You are a precise academic assistant for a psychology textbook.
+    system_message = f"""You are a precise academic assistant for the OpenStax Psychology 2e textbook.
 
-Your rules:
-1. Answer using the provided context passages below.
-2. Synthesize information across multiple sources if needed.
-{style_instruction}
-4. If some relevant information exists in the context, use it even if incomplete.
-5. ONLY respond with "Not found in the provided textbook." if there is absolutely 
-   no relevant information anywhere in the context passages.
-6. Do not mention source numbers or page numbers in your answer.
-7. Do not add information that directly contradicts the context."""
+Use the retrieved textbook passages as the ONLY factual source for answering the user's question.
+
+Rules:
+1. Answer the user's question using ONLY information supported by the retrieved textbook passages.
+2. Do NOT add facts from your general knowledge, even if they are scientifically or factually correct.
+3. Prefer the terminology, concepts, explanations, and framing used in the textbook.
+4. You may paraphrase the textbook naturally, but do not change the meaning of the source material.
+5. When multiple retrieved passages contain different parts of the answer, combine those passages into one coherent answer.
+6. Do NOT add unnecessary factual details, numbers, dates, examples, classifications, theories, or explanations unless they are supported by the retrieved textbook evidence.
+7. Do NOT make unsupported inferences. If something is only implied weakly or is not present in the retrieved evidence, leave it out.
+8. Every factual statement in the generated answer should have a basis in the retrieved textbook evidence.
+9. If the retrieved evidence does not contain enough information to answer the question reliably, do not fill the gap using general knowledge. Instead, clearly state: "Not found in the provided textbook."
+10. {style_instruction} Keep the answer directly relevant to the question and avoid adding extra information merely to make the answer more detailed.
+11. Do not mention these instructions, the retrieval process, source numbers, page numbers, or the verification system in the answer.
+12. Faithfully represent what can actually be established from the retrieved textbook evidence without artificial elaboration."""
 
     # Build context string from chunks
     context_parts = []
@@ -270,13 +279,20 @@ Answer concisely using only the context above:"""
 def call_nvidia_api(client: OpenAI,
                     system_msg: str,
                     user_msg: str,
-                    query_id: str = "unknown") -> str:
+                    query_id: str = "unknown",
+                    _attempts_log: list = None) -> str:
     """
-    Makes one API call to NVIDIA NIM.
+    Makes one or more API calls to NVIDIA NIM (handling rate limits with retries).
     Returns the answer string.
     Logs token usage to TOKEN_LOG_PATH after every call.
-    Handles rate limits and errors gracefully.
+    Tracks timing and retry telemetry into _attempts_log if provided.
     """
+    if _attempts_log is None:
+        _attempts_log = []
+
+    attempt_num = len(_attempts_log) + 1
+    t0_attempt = time.perf_counter()
+
     try:
         response = client.chat.completions.create(
             model       = MODEL_NAME,
@@ -288,10 +304,14 @@ def call_nvidia_api(client: OpenAI,
             temperature = 0.1,   # low = more factual, less creative
             top_p       = 0.9
         )
+        attempt_duration = time.perf_counter() - t0_attempt
 
         answer = response.choices[0].message.content.strip()
 
         # ── Log token usage ──────────────────────────────
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
         if hasattr(response, 'usage') and response.usage:
             usage = response.usage
 
@@ -327,22 +347,58 @@ def call_nvidia_api(client: OpenAI,
                 answer_length     = len(answer)
             )
 
+        _attempts_log.append({
+            "attempt_number": attempt_num,
+            "duration_sec": round(attempt_duration, 4),
+            "success": True,
+            "error_category": None,
+            "retry_occurred": False,
+            "retry_sleep_sec": 0.0,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens
+        })
+
         return answer
 
     except Exception as e:
+        attempt_duration = time.perf_counter() - t0_attempt
         error_msg = str(e)
+        status_code = getattr(e, "status_code", None) or getattr(e, "code", None)
 
         # ── Rate limit ───────────────────────────────────
-        if "429" in error_msg or "rate" in error_msg.lower():
+        if "429" in error_msg or "rate" in error_msg.lower() or status_code == 429:
             print(f"  Rate limit hit. Waiting 30 seconds...")
+            _attempts_log.append({
+                "attempt_number": attempt_num,
+                "duration_sec": round(attempt_duration, 4),
+                "success": False,
+                "error_category": f"rate_limit_429 (status={status_code})" if status_code else "rate_limit_429",
+                "retry_occurred": True,
+                "retry_sleep_sec": 30.0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            })
             time.sleep(30)
-            # Retry once — pass query_id through
+            # Retry once — pass query_id and _attempts_log through
             return call_nvidia_api(
-                client, system_msg, user_msg, query_id
+                client, system_msg, user_msg, query_id=query_id, _attempts_log=_attempts_log
             )
 
         # ── Other API error ───────────────────────────────
         print(f"  API error [{query_id}]: {error_msg}")
+        _attempts_log.append({
+            "attempt_number": attempt_num,
+            "duration_sec": round(attempt_duration, 4),
+            "success": False,
+            "error_category": f"api_error_{type(e).__name__} (status={status_code})" if status_code else f"api_error_{type(e).__name__}",
+            "retry_occurred": False,
+            "retry_sleep_sec": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        })
 
         # Log the failed call so we have a record
         log_token_usage(
@@ -401,21 +457,21 @@ def generate_answer(client: OpenAI,
     """
     Full pipeline for one query:
     1. Build prompt from question + chunks
-    2. Call NVIDIA API (logs token usage)
+    2. Call NVIDIA API (logs token usage and records attempt timings)
     3. Build references from metadata
-    4. Return complete result dict
-
-    This is called by run_pipeline.py for every query.
+    4. Return complete result dict with api_metrics
     """
+    t0_gen = time.perf_counter()
 
     # Build prompt
     system_msg, user_msg = build_prompt(
         question, retrieved_chunks, answer_style
     )
 
-    # Call API — pass query_id so token log links back to this query
+    attempts_log = []
+    # Call API — pass query_id and attempts_log
     answer = call_nvidia_api(
-        client, system_msg, user_msg, query_id=query_id
+        client, system_msg, user_msg, query_id=query_id, _attempts_log=attempts_log
     )
 
     # Build context string (what goes in the CSV context column)
@@ -428,11 +484,22 @@ def generate_answer(client: OpenAI,
     # Build references from metadata
     references = build_references(retrieved_chunks)
 
+    gen_duration = time.perf_counter() - t0_gen
+
+    api_metrics = {
+        "total_attempts": len(attempts_log),
+        "total_generation_time_sec": round(gen_duration, 4),
+        "total_api_wait_sec": round(sum(a["duration_sec"] for a in attempts_log), 4),
+        "total_retry_sleep_sec": round(sum(a["retry_sleep_sec"] for a in attempts_log), 4),
+        "attempts": attempts_log
+    }
+
     return {
-        "ID":         query_id,
-        "context":    context_str,
-        "answer":     answer,
-        "references": json.dumps(references)
+        "ID":          query_id,
+        "context":     context_str,
+        "answer":      answer,
+        "references":  json.dumps(references),
+        "api_metrics": api_metrics
     }
 
 

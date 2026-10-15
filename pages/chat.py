@@ -44,8 +44,10 @@ def init_chat_session():
 def process_question(question: str, components: dict, answer_style: str = "Standard (2-5 Sentences)"):
     """
     Runs full RAG pipeline for one question.
-    Appends result to chat history.
+    Appends result to chat history and logs comprehensive stage timings.
     """
+    t0_pipeline = time.perf_counter()
+    chat_qid = f"chat_{int(time.time() * 1000)}"
 
     # Add user message to history
     st.session_state.chat_history.append({
@@ -54,6 +56,7 @@ def process_question(question: str, components: dict, answer_style: str = "Stand
     })
 
     # Retrieve
+    t0_retrieval = time.perf_counter()
     retrieved = retrieve(
         query      = question,
         collection = components["collection"],
@@ -62,11 +65,19 @@ def process_question(question: str, components: dict, answer_style: str = "Stand
         chunks     = components["chunks"],
         top_k      = 7
     )
+    t_retrieval = time.perf_counter() - t0_retrieval
 
     # Relevance gate
     top_score = retrieved[0]['rrf_score'] if retrieved else 0
 
     if top_score < MIN_RRF_SCORE:
+        t_total_pipeline = time.perf_counter() - t0_pipeline
+        abstention_data = {
+            "status": "NOT_FOUND",
+            "verdict": "ABSTENTION",
+            "is_abstention": True,
+            "explanation": "The system could not find sufficient information about this question in the provided textbook."
+        }
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": {
@@ -77,13 +88,36 @@ def process_question(question: str, components: dict, answer_style: str = "Stand
                 "citations":  [],
                 "references": {},
                 "retrieved":  [],
-                "elapsed":    0
+                "elapsed":    round(t_total_pipeline, 3),
+                "verification": abstention_data
             }
         })
+
+        # Log diagnostic record for relevance gate abstention
+        try:
+            from verification_1.diagnostic_logger import build_diagnostic_record, log_diagnostic_record
+            diag_rec = build_diagnostic_record(
+                query_id             = chat_qid,
+                question             = question,
+                answer               = "Not found in textbook (relevance gate abstention)",
+                total_wall_clock_sec = t_total_pipeline,
+                retrieval_sec        = t_retrieval,
+                generation_sec       = 0.0,
+                citation_sec         = 0.0,
+                verification_sec     = 0.0,
+                snapshot_sec         = 0.0,
+                api_metrics          = None,
+                verification_data    = abstention_data,
+                retrieved_chunks     = retrieved
+            )
+            log_diagnostic_record(diag_rec)
+        except Exception:
+            pass
+
         return
 
     # Generate
-    start  = time.time()
+    t0_gen = time.perf_counter()
     result = generate_answer(
         client           = components["client"],
         query_id         = "chat",
@@ -91,9 +125,11 @@ def process_question(question: str, components: dict, answer_style: str = "Stand
         retrieved_chunks = retrieved,
         answer_style     = answer_style
     )
-    elapsed = time.time() - start
+    t_generation = time.perf_counter() - t0_gen
+    elapsed = t_generation
 
     # Find exact citations
+    t0_citations = time.perf_counter()
     citations = find_exact_citations(
         answer           = result["answer"],
         retrieved_chunks = retrieved
@@ -104,11 +140,33 @@ def process_question(question: str, components: dict, answer_style: str = "Stand
         references = build_references_from_citations(citations)
     else:
         references = json.loads(result["references"])
+    t_citations = time.perf_counter() - t0_citations
+
+    # ModernCE Verification Layer (Complete-Answer Multi-Chunk NLI)
+    t0_verif = time.perf_counter()
+    verification_data = None
+    try:
+        from verification_1.verifier import verify_answer
+        v_res = verify_answer(
+            answer           = result["answer"],
+            retrieved_chunks = retrieved,
+            query            = question
+        )
+        verification_data = v_res.to_dict()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Verification error during chat processing: {e}", exc_info=True)
+        verification_data = {
+            "status": "UNAVAILABLE",
+            "verdict": "ERROR",
+            "explanation": "Verification temporarily unavailable."
+        }
+    t_verification = time.perf_counter() - t0_verif
 
     # Save verification snapshot (safe, non-blocking)
+    t0_snapshot = time.perf_counter()
     try:
         from verification_1.context_snapshot import create_snapshot, save_snapshot
-        chat_qid = f"chat_{int(time.time() * 1000)}"
         snapshot_obj = create_snapshot(
             query_id         = chat_qid,
             question         = question,
@@ -118,16 +176,42 @@ def process_question(question: str, components: dict, answer_style: str = "Stand
         save_snapshot(snapshot_obj)
     except Exception:
         pass
+    t_snapshot = time.perf_counter() - t0_snapshot
+
+    t_total_pipeline = time.perf_counter() - t0_pipeline
+
+    # Save structured diagnostic log record
+    try:
+        from verification_1.diagnostic_logger import build_diagnostic_record, log_diagnostic_record
+        diag_rec = build_diagnostic_record(
+            query_id             = chat_qid,
+            question             = question,
+            answer               = result["answer"],
+            total_wall_clock_sec = t_total_pipeline,
+            retrieval_sec        = t_retrieval,
+            generation_sec       = t_generation,
+            citation_sec         = t_citations,
+            verification_sec     = t_verification,
+            snapshot_sec         = t_snapshot,
+            api_metrics          = result.get("api_metrics"),
+            verification_data    = verification_data,
+            retrieved_chunks     = retrieved
+        )
+        log_diagnostic_record(diag_rec)
+    except Exception as log_err:
+        import logging
+        logging.getLogger(__name__).warning(f"Diagnostic timing logging error: {log_err}")
 
     # Add assistant message to history
     st.session_state.chat_history.append({
         "role": "assistant",
         "content": {
-            "answer":     result["answer"],
-            "citations":  citations,
-            "references": references,
-            "retrieved":  retrieved,
-            "elapsed":    elapsed
+            "answer":       result["answer"],
+            "citations":    citations,
+            "references":   references,
+            "retrieved":    retrieved,
+            "elapsed":      elapsed,
+            "verification": verification_data
         }
     })
 
@@ -227,43 +311,12 @@ def render_chat(components: dict):
     else:
         render_chat_history(st.session_state.chat_history)
 
-    # ── Clear Chat Area & Exports ──
-    st.divider()
-    
-    col_clear, col_json, col_csv, col_info = st.columns([1.5, 1.5, 1.5, 3])
-    with col_clear:
-        if st.button("🗑️ Clear", use_container_width=True):
+    # ── Clear Chat Area ──
+    if st.session_state.chat_history:
+        st.divider()
+        if st.button("🗑️ Clear Conversation", use_container_width=False):
             st.session_state.chat_history = []
             st.rerun()
-
-    if st.session_state.chat_history:
-        # JSON Export
-        export_json = json.dumps(st.session_state.chat_history, indent=2)
-        with col_json:
-            st.download_button("📥 JSON", export_json, "chat_history.json", "application/json", use_container_width=True)
-        
-        # CSV Export
-        import pandas as pd
-        csv_data = []
-        for msg in st.session_state.chat_history:
-            role = msg["role"]
-            content = msg["content"].get("text", msg["content"].get("answer", ""))
-            csv_data.append({"Role": role, "Content": content})
-        export_csv = pd.DataFrame(csv_data).to_csv(index=False)
-        with col_csv:
-            st.download_button("📥 CSV", export_csv, "chat_history.csv", "text/csv", use_container_width=True)
-            
-    with col_info:
-        st.caption(f"{len(st.session_state.chat_history) // 2} question(s) in session")
-
-    # ── Inline Answer Style ──
-    st.markdown("<p style='font-size: 14px; margin-bottom: 5px; color: gray;'>Select Detail Level for next answer:</p>", unsafe_allow_html=True)
-    st.session_state.answer_style = st.radio(
-        "Answer Style",
-        ["Standard (2-5 Sentences)", "Concise Summary", "Bullet Points", "Detailed Explanation"],
-        horizontal=True,
-        label_visibility="collapsed"
-    )
 
     # ── Input Area ──
     # Handle sidebar question trigger
@@ -283,6 +336,7 @@ def render_chat(components: dict):
         query_to_process = question_input.strip()
 
     if query_to_process:
+        render_chat_message("user", {"text": query_to_process})
         with st.spinner("Searching and generating answer..."):
-            process_question(query_to_process, components, st.session_state.get("answer_style", "Standard (2-5 Sentences)"))
+            process_question(query_to_process, components)
         st.rerun()

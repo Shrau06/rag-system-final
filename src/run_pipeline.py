@@ -28,7 +28,7 @@ CHUNKS_PATH     = "cache/chunks.json"
 PROGRESS_PATH   = "cache/progress.json"
 OUTPUT_PATH     = "outputs/submission.csv"
 API_DELAY       = 1.5   # seconds between API calls
-TOP_K           = 5     # chunks per query
+TOP_K           = 7     # chunks per query (aligned with retrieve.py TOP_K_FINAL)
 
 
 # ─────────────────────────────────────────────
