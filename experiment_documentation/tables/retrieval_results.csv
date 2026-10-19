@@ -1,0 +1,15 @@
+evaluation_target,configuration_or_k,sample_size_queries,hit_rate_pct,mrr,keyword_coverage_pct,avg_context_chars,token_f1,semantic_sim_mean,notes_and_constraints,source_artifact
+Candidate Pool,K=3,18,72.2,0.541,N/A,N/A,N/A,N/A,Initial candidate pool sweep,outputs/experiments/final_k_selection/retrieval_analysis.json
+Candidate Pool,K=7,18,94.4,0.702,N/A,N/A,N/A,N/A,Initial candidate pool sweep,outputs/experiments/final_k_selection/retrieval_analysis.json
+Candidate Pool,K=10,18,94.4,0.718,N/A,N/A,N/A,N/A,Initial candidate pool sweep,outputs/experiments/final_k_selection/retrieval_analysis.json
+Candidate Pool,K=15,18,100.0,0.731,N/A,N/A,N/A,N/A,Selected candidate pool size (100% recall),outputs/experiments/final_k_selection/retrieval_analysis.json
+Candidate Pool,K=20,18,100.0,0.734,N/A,N/A,N/A,N/A,Diminishing returns over K=15,outputs/experiments/final_k_selection/retrieval_analysis.json
+Final Reranked K,K=3,18,N/A,N/A,83.2,8114,N/A,N/A,Below 95% coverage target,outputs/experiments/final_k_selection/retrieval_analysis.json
+Final Reranked K,K=7,18,N/A,N/A,98.6,19322,N/A,N/A,Optimal: 98.6% coverage within 20k char ceiling,outputs/experiments/final_k_selection/retrieval_analysis.json
+Final Reranked K,K=10,18,N/A,N/A,99.4,27450,N/A,N/A,Exceeds 20000 char prompt limit,outputs/experiments/final_k_selection/retrieval_analysis.json
+Final Reranked K,K=15,18,N/A,N/A,100.0,41200,N/A,N/A,Severe context bloat,outputs/experiments/final_k_selection/retrieval_analysis.json
+Retrieval Method Ablation,BM25 Only (K=7),18,83.3,0.584,N/A,N/A,N/A,N/A,Exact lexical matching baseline,outputs/experiments/final_k_selection/retrieval_analysis.json
+Retrieval Method Ablation,Vector Only (K=7),18,88.9,0.645,N/A,N/A,N/A,N/A,BGE-Large dense retrieval baseline,outputs/experiments/final_k_selection/retrieval_analysis.json
+Retrieval Method Ablation,Hybrid RRF (K=7),18,94.4,0.702,N/A,N/A,N/A,N/A,+8.7% MRR vs Vector / +20.1% vs BM25,outputs/experiments/final_k_selection/retrieval_analysis.json
+RAG Generation Eval,K=7 Production Baseline,50,N/A,N/A,N/A,N/A,0.395,0.824,Sim >= 0.80: 66.0% (33/50); Weak (<0.60): 2/50,outputs/submission.csv
+PDF Ingestion,Extraction Quality,341 pages,N/A,N/A,100.0,N/A,N/A,N/A,Vocab F1: 82.0% / 3-gram F1: 66.8% / Key-term: 91.8%,evaluation_results.json

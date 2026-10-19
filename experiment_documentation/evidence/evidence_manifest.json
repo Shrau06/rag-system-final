@@ -1,0 +1,383 @@
+{
+  "project": "RAG with Hallucination Verification Layer",
+  "branch": "verification-layer",
+  "generated_at": "2026-10-16",
+  "total_experiments": 17,
+  "experiments": [
+    {
+      "id": "Exp-01",
+      "title": "PDF Extraction Quality Evaluation",
+      "phase": "Phase A: Retrieval & Baseline",
+      "source_artifacts": [
+        "evaluation_results.json",
+        "data/processed_sections.json",
+        "src/evaluate.py"
+      ],
+      "sample_size": "341 textbook pages",
+      "metrics": {
+        "vocabulary_f1": 82.0,
+        "3_gram_f1": 66.8,
+        "key_term_preservation": 91.8,
+        "page_coverage": 100.0
+      },
+      "figures": [
+        "figures/retrieval/fig_exp01_extraction_quality.png"
+      ],
+      "decision": "Retained",
+      "evidence_quality": "Directly recorded in evaluation_results.json"
+    },
+    {
+      "id": "Exp-02",
+      "title": "Candidate & Final K Retrieval Optimization",
+      "phase": "Phase A: Retrieval & Baseline",
+      "source_artifacts": [
+        "outputs/experiments/final_k_selection/retrieval_analysis.json",
+        "outputs/experiments/final_k_selection/k_selection_report.md",
+        "src/evaluate_top_k.py"
+      ],
+      "sample_size": "18 queries",
+      "metrics": {
+        "candidate_pool_selected": "K=15 (Hit Rate: 100.0%, MRR: 0.731)",
+        "final_k_selected": "K=7 (Keyword Coverage: 98.6%, Context Chars: 19,322)",
+        "hybrid_rrf_vs_vector_mrr": "+8.7% (0.702 vs 0.645)",
+        "hybrid_rrf_vs_bm25_mrr": "+20.1% (0.702 vs 0.584)"
+      },
+      "figures": [
+        "figures/retrieval/fig_exp02_candidate_k_sweep.png",
+        "figures/retrieval/fig_exp02_context_coverage_chars.png",
+        "figures/retrieval/fig_exp02_hybrid_ablation.png"
+      ],
+      "decision": "Retained (Candidate K=15, Final K=7, Hybrid RRF)",
+      "evidence_quality": "Directly recorded in retrieval_analysis.json"
+    },
+    {
+      "id": "Exp-03",
+      "title": "Baseline RAG Generation Quality Benchmark",
+      "phase": "Phase A: Retrieval & Baseline",
+      "source_artifacts": [
+        "outputs/submission.csv",
+        "outputs/experiments/final_k_comparison/k7/comparison_summary.json",
+        "outputs/experiments/final_k_comparison/final_k_comparison_report.md"
+      ],
+      "sample_size": "50 questions with reference answers (outputs/dataset.json)",
+      "metrics": {
+        "mean_similarity": 0.824,
+        "high_similarity_pct": 66.0,
+        "moderate_similarity_pct": 30.0,
+        "weak_similarity_pct": 4.0,
+        "token_f1": 0.395,
+        "mean_context_tokens": 2540,
+        "mean_latency_sec": 1.98
+      },
+      "figures": [
+        "figures/baseline_rag/fig_exp03_baseline_rag_quality.png"
+      ],
+      "decision": "Retained (Set TOP_K=7 in src/run_pipeline.py)",
+      "evidence_quality": "Directly recorded in comparison_summary.json and final_k_comparison_report.md"
+    },
+    {
+      "id": "Exp-04",
+      "title": "Verification Pilot v1 (Similarity vs NLI)",
+      "phase": "Phase B: Controlled Verification",
+      "source_artifacts": [
+        "verification_1/input/pilot_dataset_v1.json",
+        "verification_1/output/pilot_summary_stats.json",
+        "verification_1/output/pilot_dataset_v1_audit.json"
+      ],
+      "sample_size": "45 synthetic/curated claim-evidence pairs (20 Ent / 15 Neu / 10 Con)",
+      "metrics": {
+        "deberta_accuracy": 95.56,
+        "deberta_macro_f1": 0.952,
+        "similarity_verdict": "Failed (Entailment mean 0.82 vs Contradiction mean 0.77 overlap)"
+      },
+      "figures": [
+        "figures/claim_level/fig_exp04_pilot_v1_distribution.png"
+      ],
+      "decision": "Retained NLI Cross-Encoder / Abandoned Pure Similarity",
+      "evidence_quality": "Directly recorded in pilot_summary_stats.json"
+    },
+    {
+      "id": "Exp-05",
+      "title": "Verification Pilot v2 & Calibration / Thresholding",
+      "phase": "Phase B: Controlled Verification",
+      "source_artifacts": [
+        "verification_1/input/pilot_dataset_v2.json",
+        "verification_1/output/verifier_evaluation_v2.json",
+        "verification_1/output/verifier_evaluation_v2_report.md"
+      ],
+      "sample_size": "60 curated pairs (25 Ent / 20 Neu / 15 Con)",
+      "metrics": {
+        "deberta_accuracy": 95.0,
+        "deberta_macro_f1": 0.948,
+        "entailment_threshold": 0.70,
+        "contradiction_threshold": 0.50
+      },
+      "figures": [
+        "figures/claim_level/fig_exp05_pilot_v2_calibration.png"
+      ],
+      "decision": "Retained calibrated decision boundaries",
+      "evidence_quality": "Directly recorded in verifier_evaluation_v2.json"
+    },
+    {
+      "id": "Exp-06",
+      "title": "280-Triple Benchmark",
+      "phase": "Phase B: Controlled Verification",
+      "source_artifacts": [
+        "verification_1/final_dataset_280eg_metadata_fixed.json",
+        "verification_1/output/verifier_280_evaluation_report.md",
+        "verification_1/output/nli_280_results.csv",
+        "verification_1/output/similarity_threshold_sweep.csv"
+      ],
+      "sample_size": "280 curated triples (110 Ent / 90 Neu / 80 Con)",
+      "metrics": {
+        "deberta_accuracy": 96.43,
+        "deberta_macro_f1": 0.963,
+        "similarity_peak_accuracy": 61.43,
+        "similarity_peak_threshold": 0.79
+      },
+      "figures": [
+        "figures/claim_level/fig_exp06_280_metrics_comparison.png",
+        "figures/claim_level/fig_exp06_similarity_threshold_sweep.png"
+      ],
+      "decision": "Validated NLI superiority on isolated triples; motivated live RAG transition",
+      "evidence_quality": "Directly recorded in verifier_280_evaluation_report.md"
+    },
+    {
+      "id": "Exp-07",
+      "title": "Live RAG Sentence-Level Verification",
+      "phase": "Phase C: Claim-Level Failure",
+      "source_artifacts": [
+        "verification_1/output/multichunk_pilot_1_5.json",
+        "verification_1/output/multichunk_pilot_1_5_report.md"
+      ],
+      "sample_size": "5 live queries (Q1-Q5) / 15 sentences",
+      "metrics": {
+        "neutral_count": 15,
+        "neutral_rate_pct": 100.0,
+        "entailed_count": 0,
+        "contradicted_count": 0,
+        "truncation_rate_pct": 57.3
+      },
+      "figures": [
+        "figures/claim_level/fig_exp07_sentence_claims_neutral_failure.png"
+      ],
+      "decision": "Diagnostic failure (revealed premise dilution and token truncation)",
+      "evidence_quality": "Directly recorded in multichunk_pilot_1_5_report.md"
+    },
+    {
+      "id": "Exp-08",
+      "title": "Atomic Claim Decomposition Pilot",
+      "phase": "Phase C: Claim-Level Failure",
+      "source_artifacts": [
+        "verification_1/output/multichunk_pilot_atomic_1_5.json",
+        "verification_1/output/multichunk_pilot_atomic_1_5_report.md"
+      ],
+      "sample_size": "5 live queries (Q1-Q5) / 44 atomic claims",
+      "metrics": {
+        "neutral_count": 40,
+        "neutral_rate_pct": 90.9,
+        "supported_count": 1,
+        "contradicted_count": 3
+      },
+      "figures": [
+        "figures/claim_level/fig_exp08_atomic_claim_distribution.png"
+      ],
+      "decision": "Abandoned atomic claim decomposition",
+      "evidence_quality": "Directly recorded in multichunk_pilot_atomic_1_5_report.md"
+    },
+    {
+      "id": "Exp-09",
+      "title": "Single-Query Latency Diagnostic (Query 41)",
+      "phase": "Phase C: Claim-Level Failure",
+      "source_artifacts": [
+        "verification_1/output/query41_granularity_test.json",
+        "verification_1/output/query41_granularity_test.md"
+      ],
+      "sample_size": "1 complex query (Query 41) / 10 claims x 5 chunks = 50 NLI pairs",
+      "metrics": {
+        "total_latency_s": 84.98,
+        "verification_latency_s": 57.88,
+        "claim_extraction_latency_s": 14.77,
+        "rag_pipeline_latency_s": 12.33,
+        "verification_pct_of_total": 68.1
+      },
+      "figures": [
+        "figures/latency/fig_exp09_query41_latency_breakdown.png"
+      ],
+      "decision": "Proved atomic claim-level verification is computationally prohibitive",
+      "evidence_quality": "Directly recorded in query41_granularity_test.json"
+    },
+    {
+      "id": "Exp-10",
+      "title": "Evidence Granularity / Micro-unit Investigation",
+      "phase": "Phase C: Claim-Level Failure",
+      "source_artifacts": [
+        "verification_1/output/evidence_granularity_diagnostic.json",
+        "verification_1/output/granularity_experiment_q1_q5.json"
+      ],
+      "sample_size": "5 queries (Q1-Q5) / 41 claim-unit pairs",
+      "metrics": {
+        "neutral_rate_pct": 80.5,
+        "context_loss_regressions": 18,
+        "pair_multiplication_factor": "~3x"
+      },
+      "figures": [
+        "figures/claim_level/fig_exp10_micro_unit_regressions.png"
+      ],
+      "decision": "Abandoned evidence micro-splitting",
+      "evidence_quality": "Directly recorded in evidence_granularity_diagnostic.json"
+    },
+    {
+      "id": "Exp-11",
+      "title": "NLI Model Truncation & Architecture Comparison",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "verification_1/output/q1_q5_nli_comparison.json",
+        "verification_1/output/q1_q5_nli_comparison_report.txt"
+      ],
+      "sample_size": "100 live RAG chunk-answer pairs",
+      "metrics": {
+        "deberta_truncation_pct": 57.3,
+        "modernce_truncation_pct": 0.0,
+        "neutral_to_entailed_shifts": 38
+      },
+      "figures": [
+        "figures/model_comparison/fig_exp11_truncation_label_shift.png"
+      ],
+      "decision": "Adopted dleemiller/ModernCE-base-nli (ModernBERT)",
+      "evidence_quality": "Directly recorded in q1_q5_nli_comparison.json"
+    },
+    {
+      "id": "Exp-12",
+      "title": "Complete-Answer Multi-Chunk Verification",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "verification_1/output/complete_answer_multichunk_q1_q5.json",
+        "verification_1/output/complete_answer_multichunk_q1_q5_report.md"
+      ],
+      "sample_size": "5 live queries (Q1-Q5)",
+      "metrics": {
+        "single_chunk_entailment_pct": 40.0,
+        "concatenated_chunk_entailment_pct": 80.0,
+        "q1_top1_prob": 0.348,
+        "q1_concatenated_prob": 0.914,
+        "eval_latency_s": "~1.0s / forward pass"
+      },
+      "figures": [
+        "figures/complete_answer/fig_exp12_multichunk_concatenation_synergy.png"
+      ],
+      "decision": "Retained Complete-Answer + Multi-Chunk Concatenation architecture",
+      "evidence_quality": "Directly recorded in complete_answer_multichunk_q1_q5_report.md"
+    },
+    {
+      "id": "Exp-13",
+      "title": "50-Question ModernCE Complete-Answer Benchmark",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "verification_1/output/modernce_50q_complete_answer/experiment_report.md",
+        "verification_1/output/modernce_50q_complete_answer/results.json",
+        "verification_1/output/modernce_50q_complete_answer/evaluation_summary.json"
+      ],
+      "sample_size": "50 queries (48 substantive content answers + 2 explicit abstentions)",
+      "metrics": {
+        "total_entailed": 45,
+        "entailment_rate_pct": 93.75,
+        "top2_entailed": 38,
+        "top3_recovered": 7,
+        "persistent_neutral": 3,
+        "contradictions": 0,
+        "mean_latency_s": 8.33
+      },
+      "figures": [
+        "figures/complete_answer/fig_exp13_50q_stage_contribution.png"
+      ],
+      "decision": "Established core project benchmark",
+      "evidence_quality": "Directly recorded in modernce_50q_complete_answer/experiment_report.md"
+    },
+    {
+      "id": "Exp-14",
+      "title": "Production Parity Validation",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "verification_1/output/modernce_50q_production_validation/comparison_report.md",
+        "verification_1/output/modernce_50q_production_validation/results.json",
+        "verification_1/verifier.py"
+      ],
+      "sample_size": "50 production queries",
+      "metrics": {
+        "status_agreement_pct": 100.0,
+        "discrepancies": 0,
+        "forward_passes_saved": 14,
+        "total_forward_passes": 298
+      },
+      "figures": [
+        "figures/final_system/fig_exp14_production_parity_agreement.png"
+      ],
+      "decision": "Validated production verifier integration",
+      "evidence_quality": "Directly recorded in modernce_50q_production_validation/comparison_report.md"
+    },
+    {
+      "id": "Exp-15",
+      "title": "Progressive Verification Stage Telemetry",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "verification_1/output/modernce_50q_complete_answer/results.json",
+        "verification_1/output/telemetry_summary.md"
+      ],
+      "sample_size": "48 content queries across TOP_1 to TOP_4",
+      "metrics": {
+        "top1_stopping_count": 18,
+        "top2_stopping_count": 20,
+        "top3_stopping_count": 7,
+        "top4_stopping_count": 0,
+        "cumulative_coverage_top3_pct": 93.75
+      },
+      "figures": [
+        "figures/complete_answer/fig_exp15_progressive_stopping_latency.png"
+      ],
+      "decision": "Capped progressive verification at TOP_3 in production",
+      "evidence_quality": "Directly recorded in modernce_50q_complete_answer/results.json"
+    },
+    {
+      "id": "Exp-16",
+      "title": "Grounding Stability & Repeated-Run Variance",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "verification_1/output/task9_grounding_experiment.json"
+      ],
+      "sample_size": "Query 1 evaluated 3 repeated times (n=3)",
+      "metrics": {
+        "scores": [0.9161, 0.9804, 0.9801],
+        "mean_score": 0.9589,
+        "std_dev": 0.037,
+        "verdict_consistency": "100.0% (3/3 Entailed)"
+      },
+      "figures": [
+        "figures/complete_answer/fig_exp16_grounding_stability_variance.png"
+      ],
+      "decision": "Confirmed deterministic verifier inference on static retrieval",
+      "evidence_quality": "Directly recorded in task9_grounding_experiment.json"
+    },
+    {
+      "id": "Exp-17",
+      "title": "UI Integration and Manual Annotation Infrastructure",
+      "phase": "Phase D: Architecture Transition",
+      "source_artifacts": [
+        "tests/test_ui.py",
+        "outputs/manual_annotation_50q.json",
+        "src/ui.py"
+      ],
+      "sample_size": "4 automated UI tests / 50 manual annotation record templates",
+      "metrics": {
+        "ui_test_pass_rate": 100.0,
+        "annotated_records_count": 0,
+        "pending_annotation_count": 50
+      },
+      "figures": [
+        "figures/final_system/fig_exp17_ui_workflow_annotation_readiness.png"
+      ],
+      "decision": "Production UI active; manual factual annotation designated as future work",
+      "evidence_quality": "Directly recorded in tests/test_ui.py and manual_annotation_50q.json"
+    }
+  ]
+}
