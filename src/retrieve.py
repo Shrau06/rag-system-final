@@ -10,8 +10,20 @@ from rank_bm25 import BM25Okapi
 from tqdm import tqdm
 
 # ─────────────────────────────────────────────
-# CONSTANTS
+# CONSTANTS & PATH RESOLUTION
 # ─────────────────────────────────────────────
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _resolve_path(rel_or_abs_path: str) -> str:
+    if not rel_or_abs_path:
+        return rel_or_abs_path
+    if os.path.isabs(rel_or_abs_path) or os.path.exists(rel_or_abs_path):
+        return rel_or_abs_path
+    candidate = os.path.join(BASE_DIR, rel_or_abs_path)
+    if os.path.exists(candidate):
+        return candidate
+    return rel_or_abs_path
 
 CHUNKS_PATH      = "cache/chunks.json"
 EMBEDDINGS_CACHE = "cache/embeddings.npy"
@@ -30,15 +42,17 @@ RRF_K            = 60   # RRF constant (standard value)
 # FUNCTION 1 — Load Everything
 # ─────────────────────────────────────────────
 
-def load_chunks(path: str) -> list:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"chunks.json not found. Run ingest.py first.")
-    with open(path, 'r', encoding='utf-8') as f:
+def load_chunks(path: str = CHUNKS_PATH) -> list:
+    resolved_path = _resolve_path(path)
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(f"chunks.json not found at {path}. Run ingest.py first.")
+    with open(resolved_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def load_chroma_collection():
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
+def load_chroma_collection(path: str = CHROMA_PATH):
+    resolved_path = _resolve_path(path)
+    client = chromadb.PersistentClient(path=resolved_path)
     collection = client.get_collection(name=COLLECTION_NAME)
     return collection
 
@@ -51,18 +65,19 @@ def load_embed_model():
 # FUNCTION 2 — Build or Load BM25 Index
 # ─────────────────────────────────────────────
 
-def load_or_build_bm25(chunks: list) -> BM25Okapi:
+def load_or_build_bm25(chunks: list, cache_path: str = BM25_CACHE) -> BM25Okapi:
     """
     Loads BM25 index from cache or builds from scratch.
 
     BM25 tokenization: lowercase, split on whitespace.
     Simple but effective for this use case.
     """
+    resolved_cache = _resolve_path(cache_path)
 
-    if os.path.exists(BM25_CACHE):
-        with open(BM25_CACHE, 'rb') as f:
+    if os.path.exists(resolved_cache):
+        with open(resolved_cache, 'rb') as f:
             bm25 = pickle.load(f)
-        print(f"✓ BM25 index loaded from cache: {BM25_CACHE}")
+        print(f"✓ BM25 index loaded from cache: {resolved_cache}")
         return bm25
 
     print("Building BM25 index...")
@@ -76,11 +91,11 @@ def load_or_build_bm25(chunks: list) -> BM25Okapi:
     bm25 = BM25Okapi(tokenized_corpus)
 
     # Save to cache
-    os.makedirs(os.path.dirname(BM25_CACHE), exist_ok=True)
-    with open(BM25_CACHE, 'wb') as f:
+    os.makedirs(os.path.dirname(resolved_cache), exist_ok=True)
+    with open(resolved_cache, 'wb') as f:
         pickle.dump(bm25, f)
 
-    print(f"✓ BM25 index built and cached: {BM25_CACHE}")
+    print(f"✓ BM25 index built and cached: {resolved_cache}")
     return bm25
 
 

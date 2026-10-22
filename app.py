@@ -1,14 +1,32 @@
 # app.py
 
+# ── ChromaDB Linux SQLite compatibility shim ──
+try:
+    __import__('pysqlite3')
+    import sys
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+    pass
+# ──────────────────────────────────────────────
+
 import os
+import sys
+
+# Ensure working directory is always the project root where app.py resides
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if os.getcwd() != PROJECT_ROOT:
+    os.chdir(PROJECT_ROOT)
+
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+sys.path.append(os.path.join(PROJECT_ROOT, 'src'))
+
 import streamlit as st
-import sys
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from embed_index import load_chunks, load_chroma_collection, load_embed_model
 from retrieve   import load_or_build_bm25
@@ -46,7 +64,8 @@ st.markdown(
 
 @st.cache_resource(show_spinner=False)
 def load_all():
-    chunks     = load_chunks("cache/chunks.json")
+    chunks_path = os.path.join(PROJECT_ROOT, "cache", "chunks.json")
+    chunks     = load_chunks(chunks_path)
     collection = load_chroma_collection()
     model      = load_embed_model()
     bm25       = load_or_build_bm25(chunks)

@@ -25,17 +25,22 @@ venv.bak/
 Thumbs.db
 
 # Generated / Cache data
-cache/
-chroma_db/
+cache/*
 temp_chroma/
 *.npy
 *.pkl
 *.whl
+
+# Whitelist ONLY the specific pre-computed runtime RAG cache files
+!cache/chunks.json
+!cache/embeddings.npy
+!cache/bm25_index.pkl
 
 # Runtime outputs
 outputs/
 verification_1/output/diagnostic_timing_log.jsonl
 verification_1/output/rag_snapshots/
 
-# Large source binaries / textbook PDF
+# Large source binaries / textbook PDF / local models
 data/book.pdf
+models/

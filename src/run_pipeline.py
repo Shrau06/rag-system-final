@@ -1,5 +1,19 @@
 # src/run_pipeline.py
 
+import sys
+
+# Ensure UTF-8 console output on Windows to prevent UnicodeEncodeError with checkmarks
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 import json
 import os
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -9,7 +23,6 @@ import pandas as pd
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from embed_index import load_chunks, load_chroma_collection, load_embed_model
@@ -18,8 +31,25 @@ from generate   import init_client, generate_answer
 
 
 # ─────────────────────────────────────────────
-# CONSTANTS
+# CONSTANTS & PATH RESOLUTION
 # ─────────────────────────────────────────────
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _resolve_path(rel_or_abs_path: str) -> str:
+    if not rel_or_abs_path:
+        return rel_or_abs_path
+    if os.path.isabs(rel_or_abs_path) and os.path.exists(rel_or_abs_path):
+        return rel_or_abs_path
+    if os.path.exists(rel_or_abs_path):
+        return os.path.abspath(rel_or_abs_path)
+    candidate = os.path.join(BASE_DIR, rel_or_abs_path)
+    if os.path.exists(candidate):
+        return candidate
+    parent_candidate = os.path.join(os.path.dirname(BASE_DIR), rel_or_abs_path)
+    if os.path.exists(parent_candidate):
+        return parent_candidate
+    return candidate
 
 load_dotenv()
 
@@ -35,20 +65,21 @@ TOP_K           = 7     # chunks per query (aligned with retrieve.py TOP_K_FINAL
 # FUNCTION 1 — Load Queries
 # ─────────────────────────────────────────────
 
-def load_queries(path: str) -> list:
+def load_queries(path: str = QUERIES_PATH) -> list:
     """
     Loads queries.json file.
     Expected format: [{"query_id": "...", "question": "..."}, ...]
 
     Also handles alternative key names just in case.
     """
-    if not os.path.exists(path):
+    resolved_path = _resolve_path(path)
+    if not os.path.exists(resolved_path):
         raise FileNotFoundError(
             f"queries.json not found at {path}\n"
             f"Download it and place in data/ folder."
         )
 
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(resolved_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     # Normalize key names

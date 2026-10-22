@@ -39,13 +39,26 @@ CONTENT_START_PAGE = 19
 # FUNCTION 1 — Load PDF
 # ─────────────────────────────────────────────
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _resolve_path(rel_or_abs_path: str) -> str:
+    if not rel_or_abs_path:
+        return rel_or_abs_path
+    if os.path.isabs(rel_or_abs_path) or os.path.exists(rel_or_abs_path):
+        return rel_or_abs_path
+    candidate = os.path.join(BASE_DIR, rel_or_abs_path)
+    if os.path.exists(candidate):
+        return candidate
+    return rel_or_abs_path
+
 def load_pdf(path: str):
-    if not os.path.exists(path):
+    resolved_path = _resolve_path(path)
+    if not os.path.exists(resolved_path):
         raise FileNotFoundError(
             f"PDF not found at: {path}\n"
             f"Put book.pdf inside the data/ folder."
         )
-    doc = fitz.open(path)
+    doc = fitz.open(resolved_path)
     print(f"✓ PDF loaded: {doc.page_count} pages found")
     return doc
 
@@ -448,14 +461,15 @@ def build_chunks(doc, section_map: list) -> list:
 # ─────────────────────────────────────────────
 
 def save_chunks(chunks: list, path: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    resolved_path = _resolve_path(path)
+    os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
 
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(resolved_path, 'w', encoding='utf-8') as f:
         json.dump(chunks, f, indent=2, ensure_ascii=False)
 
     total_chars = sum(len(c['text']) for c in chunks)
 
-    print(f"✓ Chunks saved to: {path}")
+    print(f"✓ Chunks saved to: {resolved_path}")
     print(f"  Total chunks    : {len(chunks)}")
     print(f"  Total characters: {total_chars:,}")
     print(f"  Avg chunk size  : {total_chars // len(chunks)} chars")

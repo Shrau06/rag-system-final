@@ -1,8 +1,23 @@
 # src/generate.py
 
+import sys
+
+# Ensure UTF-8 console output on Windows to prevent UnicodeEncodeError with checkmarks
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 import os
 import json
 import time
+from typing import Optional
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -170,20 +185,48 @@ def print_token_summary():
 # FUNCTION 1 — Initialize Client
 # ─────────────────────────────────────────────
 
+def _get_api_key() -> Optional[str]:
+    """
+    Retrieves the NVIDIA API key from either:
+    1. Environment variables (.env file or OS environment)
+    2. Streamlit Cloud Secrets (st.secrets)
+
+    Only catches expected missing-configuration exceptions (FileNotFoundError,
+    KeyError, AttributeError, ImportError). Unexpected exceptions remain visible.
+    """
+    key = os.getenv("NVIDIA_API_KEY")
+    if key and key.strip():
+        return key.strip()
+
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "NVIDIA_API_KEY" in st.secrets:
+            sec_key = st.secrets["NVIDIA_API_KEY"]
+            if sec_key and str(sec_key).strip():
+                return str(sec_key).strip()
+    except (FileNotFoundError, KeyError, AttributeError, ImportError):
+        # Expected when running locally without a secrets.toml file
+        pass
+
+    return None
+
+
 def init_client() -> OpenAI:
     """
     Initializes NVIDIA NIM API client.
     Validates that API key exists.
     """
-    if not NVIDIA_API_KEY:
+    api_key = _get_api_key()
+    if not api_key:
         raise ValueError(
-            "NVIDIA_API_KEY not found in .env file.\n"
-            "Add: NVIDIA_API_KEY=nvapi-your-key-here"
+            "NVIDIA_API_KEY is not configured.\n"
+            "• Local execution: Add NVIDIA_API_KEY=nvapi-... to your .env file.\n"
+            "• Streamlit Cloud: Add NVIDIA_API_KEY = \"nvapi-...\" in App Settings > Secrets."
         )
 
     client = OpenAI(
         base_url = NVIDIA_BASE_URL,
-        api_key  = NVIDIA_API_KEY
+        api_key  = api_key
     )
 
     print(f"✓ NVIDIA client initialized")

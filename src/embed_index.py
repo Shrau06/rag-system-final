@@ -18,8 +18,20 @@ except:
 # ────────────────────────────────────
 
 # ─────────────────────────────────────────────
-# CONSTANTS
+# CONSTANTS & PATH RESOLUTION
 # ─────────────────────────────────────────────
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _resolve_path(rel_or_abs_path: str) -> str:
+    if not rel_or_abs_path:
+        return rel_or_abs_path
+    if os.path.isabs(rel_or_abs_path) or os.path.exists(rel_or_abs_path):
+        return rel_or_abs_path
+    candidate = os.path.join(BASE_DIR, rel_or_abs_path)
+    if os.path.exists(candidate):
+        return candidate
+    return rel_or_abs_path
 
 CHUNKS_PATH      = "cache/chunks.json"
 EMBEDDINGS_CACHE = "cache/embeddings.npy"
@@ -33,20 +45,21 @@ BATCH_SIZE       = 64  # embed 64 chunks at a time
 # FUNCTION 1 — Load Chunks
 # ─────────────────────────────────────────────
 
-def load_chunks(path: str) -> list:
+def load_chunks(path: str = CHUNKS_PATH) -> list:
     """
     Loads chunks from cache/chunks.json
     """
-    if not os.path.exists(path):
+    resolved_path = _resolve_path(path)
+    if not os.path.exists(resolved_path):
         raise FileNotFoundError(
             f"chunks.json not found at {path}\n"
             f"Run src/ingest.py first."
         )
 
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(resolved_path, 'r', encoding='utf-8') as f:
         chunks = json.load(f)
 
-    print(f"✓ Loaded {len(chunks)} chunks from {path}")
+    print(f"✓ Loaded {len(chunks)} chunks from {resolved_path}")
     return chunks
 
 
@@ -55,21 +68,22 @@ def load_chunks(path: str) -> list:
 # ─────────────────────────────────────────────
 
 def load_or_generate_embeddings(chunks: list,
-                                 cache_path: str) -> np.ndarray:
+                                 cache_path: str = EMBEDDINGS_CACHE) -> np.ndarray:
     """
     Loads embeddings from cache if available.
     Otherwise generates them and saves to cache.
 
     Returns numpy array of shape (num_chunks, 384)
     """
+    resolved_cache = _resolve_path(cache_path)
 
     # ── Try loading from cache first ──
-    if os.path.exists(cache_path):
-        embeddings = np.load(cache_path)
+    if os.path.exists(resolved_cache):
+        embeddings = np.load(resolved_cache)
 
         # Verify cache matches current chunks
         if embeddings.shape[0] == len(chunks):
-            print(f"✓ Embeddings loaded from cache: {cache_path}")
+            print(f"✓ Embeddings loaded from cache: {resolved_cache}")
             print(f"  Shape: {embeddings.shape}")
             return embeddings
         else:
@@ -103,10 +117,10 @@ def load_or_generate_embeddings(chunks: list,
     embeddings = np.vstack(all_embeddings)
 
     # Save to cache
-    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    np.save(cache_path, embeddings)
+    os.makedirs(os.path.dirname(resolved_cache), exist_ok=True)
+    np.save(resolved_cache, embeddings)
 
-    print(f"✓ Embeddings generated and cached: {cache_path}")
+    print(f"✓ Embeddings generated and cached: {resolved_cache}")
     print(f"  Shape: {embeddings.shape}")
     print(f"  Each chunk → {embeddings.shape[1]}-dimensional vector")
 
@@ -117,16 +131,17 @@ def load_or_generate_embeddings(chunks: list,
 # FUNCTION 3 — Initialize ChromaDB
 # ─────────────────────────────────────────────
 
-def init_chroma(path: str):
+def init_chroma(path: str = CHROMA_PATH):
     """
     Initializes persistent ChromaDB client.
     Data survives restarts — stored on disk at chroma_db/
     """
+    resolved_path = _resolve_path(path)
     client = chromadb.PersistentClient(
-        path=path,
+        path=resolved_path,
         settings=chromadb.config.Settings(anonymized_telemetry=False)
     )
-    print(f"✓ ChromaDB initialized at: {path}")
+    print(f"✓ ChromaDB initialized at: {resolved_path}")
     return client
 
 
@@ -296,27 +311,13 @@ def print_stats(collection, chunks: list):
 # LOADER FUNCTIONS — used by run_pipeline.py
 # ─────────────────────────────────────────────
 
-def load_chunks(path: str = CHUNKS_PATH) -> list:
-    """
-    Loads chunks from cache/chunks.json
-    """
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"chunks.json not found at {path}\n"
-            f"Run src/ingest.py first."
-        )
-    with open(path, 'r', encoding='utf-8') as f:
-        chunks = json.load(f)
-    print(f"✓ Loaded {len(chunks)} chunks from {path}")
-    return chunks
-
-
-def load_chroma_collection():
+def load_chroma_collection(path: str = CHROMA_PATH):
     """
     Loads existing ChromaDB collection.
     """
+    resolved_path = _resolve_path(path)
     client = chromadb.PersistentClient(
-        path=CHROMA_PATH,
+        path=resolved_path,
         settings=chromadb.config.Settings(anonymized_telemetry=False)
     )
     collection = client.get_collection(name=COLLECTION_NAME)
