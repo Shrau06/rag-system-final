@@ -6,6 +6,23 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 import json
 import numpy as np
 import chromadb
+import chromadb.segment.impl.metadata.sqlite as _chroma_sqlite
+
+# ── ChromaDB integer seq_id decoder compatibility shim ──
+# Deployed chromadb==0.5.3 _decode_seq_id expects bytes, but max_seq_id
+# table after migration 5 stores seq_id as a native INTEGER.
+if not getattr(_chroma_sqlite._decode_seq_id, "_is_int_safe", False):
+    _orig_decode_seq_id = _chroma_sqlite._decode_seq_id
+
+    def _safe_decode_seq_id(seq_id_bytes):
+        if isinstance(seq_id_bytes, int):
+            return seq_id_bytes
+        return _orig_decode_seq_id(seq_id_bytes)
+
+    _safe_decode_seq_id._is_int_safe = True
+    _chroma_sqlite._decode_seq_id = _safe_decode_seq_id
+# ─────────────────────────────────────────────────────────
+
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
