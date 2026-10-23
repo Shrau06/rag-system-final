@@ -11,6 +11,7 @@ except ImportError:
 
 import os
 import sys
+import traceback
 
 # Ensure working directory is always the project root where app.py resides
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +90,7 @@ def main():
         try:
             components = load_all()
         except Exception as e:
+            traceback.print_exc()
             st.error(f"Failed to load system: {e}")
             st.info("Make sure ingest.py and embed_index.py have been run.")
             st.stop()
