@@ -7,6 +7,7 @@ import json
 import numpy as np
 import chromadb
 import chromadb.segment.impl.metadata.sqlite as _chroma_sqlite
+import chromadb.segment.impl.vector.local_persistent_hnsw as _chroma_hnsw
 
 # ── ChromaDB integer seq_id decoder compatibility shim ──
 # Deployed chromadb==0.5.3 _decode_seq_id expects bytes, but max_seq_id
@@ -21,6 +22,45 @@ if not getattr(_chroma_sqlite._decode_seq_id, "_is_int_safe", False):
 
     _safe_decode_seq_id._is_int_safe = True
     _chroma_sqlite._decode_seq_id = _safe_decode_seq_id
+# ─────────────────────────────────────────────────────────
+
+import pickle
+# ── ChromaDB HNSW dict metadata compatibility shim ───────
+# Stock chromadb==0.5.3 load_from_file expects PersistentData, but
+# index_metadata.pickle was serialized as a dict, causing AttributeError.
+if not getattr(_chroma_hnsw.PersistentData.load_from_file, "_is_dict_safe", False):
+    _orig_load_from_file = _chroma_hnsw.PersistentData.load_from_file
+    _REQUIRED_HNSW_METADATA_KEYS = {
+        "dimensionality",
+        "total_elements_added",
+        "max_seq_id",
+        "id_to_label",
+        "label_to_id",
+        "id_to_seq_id",
+    }
+
+    def _safe_load_from_file(filename: str) -> _chroma_hnsw.PersistentData:
+        with open(filename, "rb") as f:
+            ret = pickle.load(f)
+        if isinstance(ret, dict):
+            missing_keys = _REQUIRED_HNSW_METADATA_KEYS - ret.keys()
+            if missing_keys:
+                raise ValueError(
+                    f"Corrupt or incompatible index metadata in {filename}: "
+                    f"missing required PersistentData keys: {sorted(missing_keys)}"
+                )
+            return _chroma_hnsw.PersistentData(
+                dimensionality=ret["dimensionality"],
+                total_elements_added=ret["total_elements_added"],
+                max_seq_id=ret["max_seq_id"],
+                id_to_label=ret["id_to_label"],
+                label_to_id=ret["label_to_id"],
+                id_to_seq_id=ret["id_to_seq_id"],
+            )
+        return ret
+
+    _safe_load_from_file._is_dict_safe = True
+    _chroma_hnsw.PersistentData.load_from_file = _safe_load_from_file
 # ─────────────────────────────────────────────────────────
 
 from sentence_transformers import SentenceTransformer
